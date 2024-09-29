@@ -1,10 +1,10 @@
-# Copied from: https://github.com/run-llama/create-llama/blob/578f7f9e501c279802ac48eaa3966efd9460370b/templates/types/multiagent/fastapi/app/agents/multi.py
-import asyncio
+# Copied from: https://github.com/run-llama/create-llama/blob/b31fa80326400bfb94c95de2ffff7c31a8bf9eba/templates/types/multiagent/fastapi/app/agents/multi.py
 from typing import Any, List
 
 from llama_index.core.tools.types import ToolMetadata, ToolOutput
 from llama_index.core.tools.utils import create_schema_from_function
 from llama_index.core.workflow import Context, Workflow
+from llama_index.core.workflow.events import StopEvent
 
 from backend.agents.planner import StructuredPlannerAgent
 from backend.agents.single import (
@@ -35,11 +35,12 @@ class AgentCallTool(ContextAwareTool):
 
     # overload the acall function with the ctx argument as it's needed for bubbling the events
     async def acall(self, ctx: Context, input: str) -> ToolOutput:
-        task = asyncio.create_task(self.agent.run(input=input))
+        handler = self.agent.run(input=input)
         # bubble all events while running the agent to the calling agent
-        async for ev in self.agent.stream_events():
-            ctx.write_event_to_stream(ev)
-        ret: AgentRunResult = await task
+        async for ev in handler.stream_events():
+            if type(ev) is not StopEvent:
+                ctx.write_event_to_stream(ev)
+        ret: AgentRunResult = await handler
         response = ret.response.message.content
         return ToolOutput(
             content=str(response),
@@ -47,6 +48,17 @@ class AgentCallTool(ContextAwareTool):
             raw_input={"args": input, "kwargs": {}},
             raw_output=response,
         )
+
+    async def astream_response(self, ctx: Context, input: str) -> AgentRunResult:
+        handler = self.agent.run(
+            input=input,
+            streaming=True,
+        )
+        async for ev in handler.stream_events():
+            if type(ev) is not StopEvent:
+                ctx.write_event_to_stream(ev)
+        result = await handler
+        return result
 
 
 class AgentOrchestrator(StructuredPlannerAgent):
